@@ -16,6 +16,8 @@ This repo shows how to implement complete network security through AWS Cloud Ser
 ![Centralized Firewall Inspection Model](/assets/images/architecture_design.png)
 This environment uses the central firewall inspection model of AWS. CloudFront and AWS WAF offer layer 7 traffic inspection and prevention against botnets and DDoS attacks. Network Firewall primarily offers deep packet inspection, allowing you to write rules for egress inspection of PII, HIPAA, or SOC-compliance-related data.
 
+Network Firewall, makes use of Gateway Load Balancer with hair pin routing
+
 This architecture has two Egress Endpoints (NAT, Central NLB) and one ingress endpoint (Central NLB). Therefore reducing the cost, and security threat scope to the bare minimum. 
 
 Security groups should be used to limit ingress traffic to the Central NLB only from Cloudfront Prefix-lists, and to control TCP/UDP traffic at layer 4. This way all API requests can be routed through the Private Network, without having to travel the public internet. Although this adds cost for Managing a VPN 
