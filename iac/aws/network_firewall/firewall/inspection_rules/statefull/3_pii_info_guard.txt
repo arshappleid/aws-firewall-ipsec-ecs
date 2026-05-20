@@ -1,0 +1,1 @@
+alert http $BACKEND_VPC any -> $INSPECTION_VPC any (msg:"POLICY Excessive outbound email - more than 10 connections from backend"; flow:to_server,established; threshold: type threshold, track by_src, count 10, seconds 60; sid:4000001; rev:1;)

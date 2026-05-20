@@ -1,0 +1,5 @@
+# Datadog SNI allow (egress)
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (msg:"Allow TLS SNI containing datadog"; flow:to_server,established; ssl_state:client_hello; tls.sni; content:"datadog"; nocase; sid:202501178; rev:2;)
+
+# Allow Datadog User-Agent traffic from NLB to backend
+pass http $NLB any -> $HOME_NET any (msg:"Allow HTTP User-Agent containing Datadog from NLB to backend"; flow:to_server,established; http.user_agent; content:"Datadog"; nocase; sid:202501179; rev:1;)

@@ -1,0 +1,33 @@
+# Suricata stateful allow rules
+# Allow outbound connections initiated by HOME_NET to approved domains
+
+# google.com
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; dotprefix; content:".google.com"; nocase; endswith; flow:to_server; sid:2026042801; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; dotprefix; content:".google.com"; endswith; flow:to_server; sid:2026042802; rev:1;)
+
+# www.google.com (strict host)
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; content:"www.google.com"; startswith; nocase; endswith; flow:to_server; sid:2026042803; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; content:"www.google.com"; startswith; endswith; flow:to_server; sid:2026042804; rev:1;)
+
+# api.datemaroon.com
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; content:"api.datemaroon.com"; startswith; nocase; endswith; flow:to_server; sid:2026042805; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; content:"api.datemaroon.com"; startswith; endswith; flow:to_server; sid:2026042806; rev:1;)
+
+# deb.debian.org
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; content:"deb.debian.org"; startswith; nocase; endswith; flow:to_server; sid:2026042807; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; content:"deb.debian.org"; startswith; endswith; flow:to_server; sid:2026042808; rev:1;)
+
+# central-network-inpsection-nlb-cc3c1ce602e752c5.elb.us-east-2.amazonaws.com
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; content:"central-network-inpsection-nlb-cc3c1ce602e752c5.elb.us-east-2.amazonaws.com"; startswith; nocase; endswith; flow:to_server; sid:2026042809; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; content:"central-network-inpsection-nlb-cc3c1ce602e752c5.elb.us-east-2.amazonaws.com"; startswith; endswith; flow:to_server; sid:2026042810; rev:1;)
+
+# ec2-3-147-163-252.us-east-2.compute.amazonaws.com
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; content:"ec2-3-147-163-252.us-east-2.compute.amazonaws.com"; startswith; nocase; endswith; flow:to_server; sid:2026042811; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; content:"ec2-3-147-163-252.us-east-2.compute.amazonaws.com"; startswith; endswith; flow:to_server; sid:2026042812; rev:1;)
+
+# direct IP allow
+pass ip $HOME_NET any -> 3.147.163.252 any (flow:to_server; sid:2026042813; rev:1;)
+
+# search-maroon-opensearch-bedcamqibstbfdnrobyqenc7za.us-east-2.es.amazonaws.com
+pass tls $HOME_NET any -> $EXTERNAL_NET 443 (tls.sni; content:"search-maroon-opensearch-bedcamqibstbfdnrobyqenc7za.us-east-2.es.amazonaws.com"; startswith; nocase; endswith; flow:to_server; sid:2026042814; rev:1;)
+pass http $HOME_NET any -> $EXTERNAL_NET 80 (http.host; content:"search-maroon-opensearch-bedcamqibstbfdnrobyqenc7za.us-east-2.es.amazonaws.com"; startswith; endswith; flow:to_server; sid:2026042815; rev:1;)

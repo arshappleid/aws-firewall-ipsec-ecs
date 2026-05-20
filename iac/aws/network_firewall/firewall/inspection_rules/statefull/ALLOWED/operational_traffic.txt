@@ -1,0 +1,31 @@
+# Operation Protocols — Suricata rules for allowed operational protocols
+# If Explicity Allow Is not stated Here it will not work or be allowed, as per the default Action
+
+# ── WebSocket connections (egress + ingress) ──────────────────────────────────
+# WebSockets start as HTTP with "Upgrade: websocket" header, then persist as long-lived TCP
+# flowbits:set,websocket marks the flow so downstream rule groups skip port enforcement
+# Allow egress WebSocket upgrade over HTTP (ws://)
+pass http $HOME_NET any -> any 80 (http.header; content:"Upgrade|3a 20|websocket"; nocase; msg:"Egress WebSocket upgrade allowed (HTTP)"; flowbits:set,websocket; flow:to_server; sid:202501070;)
+# Allow egress WebSocket upgrade over HTTPS (wss://)
+pass http $HOME_NET any -> any 443 (http.header; content:"Upgrade|3a 20|websocket"; nocase; msg:"Egress WebSocket upgrade allowed (HTTPS)"; flowbits:set,websocket; flow:to_server; sid:202501071;)
+# Allow ingress WebSocket upgrade over HTTP (ws://)
+pass http any any -> $HOME_NET 80 (http.header; content:"Upgrade|3a 20|websocket"; nocase; msg:"Ingress WebSocket upgrade allowed (HTTP)"; flowbits:set,websocket; flow:to_server; sid:202501072;)
+# Allow ingress WebSocket upgrade over HTTPS (wss://)
+pass http any any -> $HOME_NET 443 (http.header; content:"Upgrade|3a 20|websocket"; nocase; msg:"Ingress WebSocket upgrade allowed (HTTPS)"; flowbits:set,websocket; flow:to_server; sid:202501073;)
+
+## TCP Traffic From the NLB to the BACKEND VPC
+pass tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"Allow TCP NLB port outbound to BACKEND"; flow:established,to_server; sid:202501079; rev:1;)
+pass tcp $NLB any -> $HOME_NET any (msg:"Allow TCP NLB port outbound to BACKEND"; flow:established,to_server; sid:202501074; rev:1;)
+pass tcp $HOME_NET any -> $NLB any (msg:"Allow TCP Outbound to NLB"; flow:established,to_client; sid:202501075; rev:1;)
+
+
+## UDP Traffic From the NLB to the BACKEND VPC - To Allow QUIC Traffic
+pass udp $NLB any -> $HOME_NET any (msg:"Allow UDP NLB port outbound to BACKEND"; flow:established,to_server;sid:202501076; rev:1;)
+pass udp $HOME_NET any -> $NLB any (msg:"Allow UDP Outbound to NLB"; flow:established,to_client;sid:202501077; rev:1;)
+
+
+## Allow any traffic initiated by the Backend VPC (egress + return traffic)
+pass tcp $HOME_NET any -> any any (msg:"Allow any TCP initiated by Backend VPC"; flow:established,to_server; sid:202501080; rev:1;)
+pass udp $HOME_NET any -> any any (msg:"Allow any UDP initiated by Backend VPC"; sid:202501081; rev:1;)
+pass icmp $HOME_NET any -> any any (msg:"Allow any ICMP initiated by Backend VPC"; sid:202501082; rev:1;)
+

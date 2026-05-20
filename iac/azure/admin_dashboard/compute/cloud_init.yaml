@@ -1,0 +1,220 @@
+#cloud-config
+# ─────────────────────────────────────────────────────────────────────────────
+# Startup script for the admin-dashboard VM.
+# Runs on first boot via Azure cloud-init (Ubuntu).
+#
+# What it does:
+#   1. Updates packages
+#   2. Installs Docker (via the official convenience script)
+#   3. Installs Docker Compose v2 plugin + v1 shim symlink
+#   4. Clones the GitHub repository to /opt/app
+#      - Uses a dedicated read-only fine-grained PAT (github_clone_token)
+#      - Token embedded in HTTPS URL, never written to disk
+#   5. Creates /opt/start-app.sh helper to (re)start the app
+#   6. Installs the GitHub Actions self-hosted runner
+#      - Registers with the repo using a separate broader PAT (github_pat)
+#      - Runs as a dedicated 'github-runner' system user (docker group)
+#      - Started as a systemd service that survives reboots
+#      - Both tokens stored in /etc/github-runner.env (640, root:github-runner)
+# ─────────────────────────────────────────────────────────────────────────────
+
+package_update: true
+package_upgrade: true
+
+packages:
+    - apt-transport-https
+    - ca-certificates
+    - curl
+    - gnupg
+    - lsb-release
+    - git
+    - jq
+    - unzip
+    - nginx
+    - certbot
+    - python3-certbot-nginx
+
+runcmd:
+    # ── Docker ──────────────────────────────────────────────────────────────────
+    - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    - sh /tmp/get-docker.sh
+    - usermod -aG docker ${admin_username}
+    - systemctl enable docker
+    - systemctl start docker
+
+    # ── Docker Compose v2 (CLI plugin + v1-compatible shim) ─────────────────────
+    - mkdir -p /usr/local/lib/docker/cli-plugins
+    - curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose
+    - chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    - ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
+    # ── Clone the application repository ────────────────────────────────────────
+    # PAT is embedded in the HTTPS URL so git authenticates without a credential
+    # helper or .netrc file written to disk.
+    - |
+        REPO_URL=$(echo "${github_repo_url}" | sed 's|https://|https://${github_pat}@|')
+        git clone --branch ${github_branch} --single-branch "$REPO_URL" /opt/app
+    - chown -R ${admin_username}:${admin_username} /opt/app
+    # ── Nginx + TLS (Let's Encrypt via Certbot) ──────────────────────────────────
+    # Nginx owns ports 80 and 443 on the host.
+    # The app container is patched to bind to localhost:${app_port} so it doesn't
+    # conflict with nginx on port 80.
+    - |
+        sed -i 's|"80:5173"|"127.0.0.1:${app_port}:5173"|g' /opt/app/docker-compose.yaml || true
+
+    # Initial HTTP-only nginx config — required so certbot can complete the
+    # http-01 challenge before we switch to SSL.
+    - |
+        cat > /etc/nginx/sites-available/company-app << 'NGINX'
+        server {
+            listen 80;
+            server_name ${domain_name};
+            location / {
+                proxy_pass http://127.0.0.1:${app_port};
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+        NGINX
+    - ln -sf /etc/nginx/sites-available/company-app /etc/nginx/sites-enabled/company-app
+    - rm -f /etc/nginx/sites-enabled/default
+    - nginx -t && systemctl reload nginx
+
+    # Obtain TLS certificate from Let's Encrypt (http-01 challenge via nginx).
+    - |
+        certbot certonly \
+          --nginx \
+          --non-interactive \
+          --agree-tos \
+          --email admin@${domain_name} \
+          -d ${domain_name} || true
+
+    # Overwrite the HTTP-only config with the full SSL config now that the cert exists.
+    - |
+        cat > /etc/nginx/sites-available/company-app << 'NGINX'
+        server {
+            listen 80;
+            server_name ${domain_name};
+            return 301 https://$host$request_uri;
+        }
+        server {
+            listen 443 ssl;
+            server_name ${domain_name};
+            ssl_certificate     /etc/letsencrypt/live/${domain_name}/fullchain.pem;
+            ssl_certificate_key /etc/letsencrypt/live/${domain_name}/privkey.pem;
+            ssl_protocols       TLSv1.2 TLSv1.3;
+            ssl_ciphers         HIGH:!aNULL:!MD5;
+            ssl_prefer_server_ciphers on;
+            location / {
+                proxy_pass         http://127.0.0.1:${app_port};
+                proxy_http_version 1.1;
+                proxy_set_header   Upgrade $http_upgrade;
+                proxy_set_header   Connection keep-alive;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+            }
+        }
+        NGINX
+    - nginx -t && systemctl reload nginx
+    # Auto-renew cert daily at 03:00 (certbot skips if not due).
+    - echo "0 3 * * * root certbot renew --quiet --nginx" > /etc/cron.d/certbot-renew
+
+    # ── App systemd service (starts on every boot, not just first) ──────────────
+    # Requires=docker.service ensures Docker is ready before the app starts.
+    # systemctl enable registers it so the app auto-starts when Azure Automation
+    # powers the VM on each morning.
+    - |
+        cat > /etc/systemd/system/company-app.service << 'SERVICE'
+        [Unit]
+        Description=Company Admin Dashboard (Docker Compose)
+        Requires=docker.service
+        After=docker.service network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        WorkingDirectory=/opt/app
+        ExecStart=/bin/bash -c 'docker-compose build && docker-compose up -d'
+        ExecStop=/usr/local/bin/docker-compose down
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+        SERVICE
+    - systemctl daemon-reload
+    - systemctl enable company-app.service
+    - systemctl start company-app.service
+
+    # ── GitHub Actions self-hosted runner ────────────────────────────────────────
+    # Dedicated system user — unprivileged but in the docker group so workflow
+    # steps can run `docker` / `docker compose` commands without sudo.
+    - useradd -r -m -s /bin/bash github-runner
+    - usermod -aG docker github-runner
+
+    # Environment file — vars are injected into every runner workflow step
+    # automatically, and available to any shell script that sources this file.
+    # Stored 640 so only root + github-runner group can read it.
+    - |
+        cat > /etc/github-runner.env << 'ENVFILE'
+        GITHUB_REPO_URL=${github_repo_url}
+        GITHUB_BRANCH=${github_branch}
+        GITHUB_TOKEN=${github_pat}
+        ENVFILE
+    - chmod 640 /etc/github-runner.env
+    - chown root:github-runner /etc/github-runner.env
+
+    # Download the latest stable runner release for linux/x64.
+    - mkdir -p /opt/github-runner
+    - |
+        RUNNER_VER=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest \
+          | jq -r '.tag_name' | sed 's/v//')
+        curl -fsSL \
+          "https://github.com/actions/runner/releases/download/v$RUNNER_VER/actions-runner-linux-x64-$RUNNER_VER.tar.gz" \
+          -o /tmp/actions-runner.tar.gz
+        tar xzf /tmp/actions-runner.tar.gz -C /opt/github-runner
+        chown -R github-runner:github-runner /opt/github-runner
+
+    # Obtain a one-time registration token from the GitHub API using the PAT,
+    # then configure the runner against the target repository.
+    # The PAT is only needed here — after registration the runner stores its
+    # own credentials and the PAT is no longer required for runner operation.
+    - |
+        RUNNER_REPO_URL=$(echo "${github_repo_url}" | sed 's/\.git$//')
+        REPO_PATH=$(echo "$RUNNER_REPO_URL" | sed 's|https://github.com/||')
+        REG_TOKEN=$(curl -fsSL -X POST \
+          -H "Authorization: Bearer ${github_pat}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/$REPO_PATH/actions/runners/registration-token" \
+          | jq -r '.token')
+        sudo -u github-runner /opt/github-runner/config.sh \
+          --url "$RUNNER_REPO_URL" \
+          --token "$REG_TOKEN" \
+          --name "admin-dashboard-vm" \
+          --labels "admin-dashboard,linux,docker" \
+          --unattended \
+          --replace
+
+    # Install the runner as a systemd service (runs as github-runner user)
+    # and start it — it will automatically restart on VM reboots.
+    - |
+        cd /opt/github-runner
+        ./svc.sh install github-runner
+        ./svc.sh start
+
+final_message: |
+    ✅ Admin-dashboard VM is ready.
+    • Docker:            $(docker --version)
+    • Docker Compose:    $(docker-compose --version)
+    • App cloned to:     /opt/app
+    • App service:       systemctl status company-app
+    • GitHub runner:     systemctl status actions.runner.*
+    • HTTPS URL:         https://${domain_name}
+    • TLS cert:          /etc/letsencrypt/live/${domain_name}/fullchain.pem
+    • Cert renewal:      cron daily 03:00 via /etc/cron.d/certbot-renew
+    • Runner env file:   /etc/github-runner.env  (GITHUB_REPO_URL, GITHUB_BRANCH, GITHUB_TOKEN)
+    • Runner directory:  /opt/github-runner
